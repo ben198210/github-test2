@@ -1,2 +1,1463 @@
-Hello GitHub! 
-Update success! 
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>高壓系統動態故障分析 V19.0</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family:'Noto Sans TC',sans-serif; overflow:hidden; }
+  .mono { font-family:'Roboto Mono',monospace; }
+  .tab-content { display: none; height: 100%; width: 100%; flex-direction: column; overflow: hidden; }
+  .tab-content.active { display: flex !important; }
+  .upload-zone { border:2px dashed #475569; transition:all .3s; }
+  .upload-zone.dragover { border-color:#6366f1; background:#1e1b4b; }
+  .loader { border:3px solid #1e293b; border-top:3px solid #818cf8; border-radius:50%; width:20px; height:20px; animation:spin 1s linear infinite; }
+  @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+  .bus-node { cursor:pointer; }
+  .bus-node:hover .bus-hit { opacity:.15; }
+  .bus-hit { fill:white; opacity:0; transition:opacity .15s; }
+  .fp { animation:fp .65s infinite alternate; }
+  @keyframes fp{from{opacity:1}to{opacity:.25}}
+  .eq-card { border-left:3px solid; background:#1e293b; border-radius:6px; padding:7px 10px; margin-bottom:5px; font-size:10px; }
+  select, input[type=number], input[type=text] { background:#0f172a; border:1px solid #334155; color:#e2e8f0; border-radius:4px; padding:2px 5px; font-size:10px; }
+  select:focus, input:focus { outline:1px solid #6366f1; }
+  .zoom-btn { background:#1e293b; border:1px solid #334155; color:#94a3b8; padding:2px 7px; border-radius:4px; font-size:11px; cursor:pointer; transition:background .15s; font-family:'Roboto Mono',monospace; }
+  .zoom-btn:hover { background:#334155; color:#e2e8f0; }
+  #sldSvg { cursor:grab; }
+  #sldSvg.dragging { cursor:grabbing; }
+  #report-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.9); z-index:100; align-items:center; justify-content:center; backdrop-filter:blur(5px); }
+  .rpt { width:210mm; max-height:96vh; background:white; padding:15mm; border-radius:6px; overflow-y:auto; font-size:10pt; color:#1f2937; line-height:1.7; }
+  .rpt h1 { font-size:16pt; font-weight:700; text-align:center; border-bottom:3px double #000; padding-bottom:8px; margin-bottom:14px; }
+  .rpt h2 { font-size:11.5pt; font-weight:700; color:#1e3a8a; border-bottom:2px solid #3b82f6; padding-bottom:3px; margin:12px 0 7px; }
+  .rpt table { width:100%; border-collapse:collapse; font-family:'Roboto Mono',monospace; font-size:9pt; margin-bottom:8px; }
+  .rpt th,.rpt td { border:1px solid #9ca3af; padding:5px 8px; }
+  .rpt th { background:#f3f4f6; text-align:center; font-weight:700; }
+  @media print {
+    @page{size:A4;margin:12mm}
+    body *{visibility:hidden}
+    #report-overlay,#report-overlay *{visibility:visible}
+    #report-overlay{position:absolute;left:0;top:0;width:100%;background:white;display:block!important}
+    .rpt{width:100%!important;height:auto!important;padding:0!important;box-shadow:none!important}
+    .no-print{display:none!important}
+  }
+</style>
+</head>
+<body class="bg-slate-950 text-slate-200 h-screen flex flex-col">
+
+<!-- HEADER -->
+<header class="bg-slate-950 border-b border-slate-800 px-4 py-1.5 flex items-center justify-between shrink-0">
+  <div class="flex items-center gap-2">
+    <span class="text-indigo-400">⚡</span>
+    <span class="text-sm font-bold text-slate-100">高壓系統動態單線圖與故障分析</span>
+    <span class="text-[9px] bg-indigo-900 border border-indigo-700 px-1.5 py-0.5 rounded text-indigo-300">V19.0 · 節點電壓</span>
+  </div>
+  <div class="flex items-center gap-3 text-[9px] mono text-slate-500">
+    <span id="hdrBase">S_base: -- MVA</span>
+    <span id="hdrBuses">Buses: --</span>
+  </div>
+</header>
+
+<!-- TAB NAVIGATION -->
+<nav class="bg-slate-900 border-b border-slate-800 flex px-2 shrink-0 z-10">
+  <button id="tabBtn-equip" onclick="App.switchTab('equip')" class="px-4 py-2.5 text-xs font-bold border-b-2 border-indigo-500 text-indigo-400 transition-colors">1. 設備與參數設定</button>
+  <button id="tabBtn-sld" onclick="App.switchTab('sld')" class="px-4 py-2.5 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors">2. 互動單線圖</button>
+  <button id="tabBtn-fault" onclick="App.switchTab('fault')" class="px-4 py-2.5 text-xs font-bold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors">3. 故障分析結果</button>
+</nav>
+
+<!-- MAIN -->
+<main class="flex-1 overflow-hidden relative">
+
+  <!-- VIEW 1: Equipment -->
+  <section id="view-equip" class="tab-content active bg-slate-900">
+    <!-- Upload -->
+    <div class="p-3 shrink-0 max-w-2xl mx-auto w-full mt-2">
+      <label id="dropZone" class="upload-zone flex flex-col items-center justify-center w-full h-16 bg-slate-800/40 rounded-lg cursor-pointer hover:bg-slate-800 relative overflow-hidden">
+        <input type="file" id="fileInput" class="hidden" accept="image/*,application/pdf" onchange="App.handleUpload(event)">
+        <div id="uploadIdle" class="text-center px-3">
+          <p class="text-xs font-bold text-slate-300 mb-0.5">拖曳 SLD 圖面 / PDF</p>
+          <p class="text-[10px] text-slate-500">AI 自動識別設備 → 生成互動單線圖</p>
+        </div>
+        <div id="uploadBusy" class="hidden absolute inset-0 bg-slate-900/95 flex flex-col items-center justify-center gap-1.5">
+          <div class="loader"></div>
+          <p class="text-[10px] font-bold text-indigo-300">Gemini 解析圖面中...</p>
+        </div>
+      </label>
+    </div>
+    <!-- Equipment list -->
+    <div class="flex-1 overflow-y-auto px-4 pb-4 max-w-3xl mx-auto w-full" id="equipList">
+      <div class="text-xs text-slate-600 text-center pt-8">上傳圖面或點擊「載入範例」</div>
+    </div>
+    <!-- Bottom buttons -->
+    <div class="shrink-0 px-4 pb-4 pt-2 flex gap-2 max-w-3xl mx-auto w-full">
+      <button onclick="App.loadDefault()" class="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded border border-slate-700">
+        載入範例（明潭北山）
+      </button>
+      <button onclick="App.openImportModal()" class="flex-1 py-2 bg-indigo-900 hover:bg-indigo-800 text-indigo-200 text-xs rounded border border-indigo-700" title="從辨識 JSON 匯入系統參數">
+        ⬆ 匯入 JSON
+      </button>
+    </div>
+  </section>
+
+  <!-- VIEW 2: SLD -->
+  <section id="view-sld" class="tab-content bg-slate-950">
+    <!-- SLD Toolbar -->
+    <div class="shrink-0 bg-slate-900 border-b border-slate-800 px-3 py-2 flex items-center gap-2">
+      <span class="text-[10px] text-slate-600 flex items-center gap-1.5">
+        <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse inline-block"></span>
+        互動單線圖
+      </span>
+      <span class="text-slate-800 mx-1">|</span>
+      <button class="zoom-btn" onclick="PZ.zoomIn()">＋</button>
+      <button class="zoom-btn" onclick="PZ.zoomOut()">－</button>
+      <button class="zoom-btn" onclick="PZ.fit()">⊡ 適配</button>
+      <button class="zoom-btn" onclick="PZ.reset()">⊞ 重置</button>
+      <span class="mono text-xs text-indigo-400 ml-1" id="zoomLabel">100%</span>
+      <span class="text-[9px] text-slate-700 ml-2">滾輪縮放 · 拖曳平移</span>
+      <div class="flex-1"></div>
+      <div class="flex gap-3 flex-wrap" id="voltLegend"></div>
+    </div>
+    <!-- SVG — full remaining height -->
+    <div class="flex-1 relative overflow-hidden" id="sldWrap">
+      <svg id="sldSvg" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="3" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <filter id="glow-sm" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="2" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <g id="sld-content">
+          <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" fill="#1e3a5f" font-size="14" font-family="Noto Sans TC">請上傳 SLD 圖面或點擊「載入範例系統」</text>
+        </g>
+      </svg>
+      <!-- Floating hint when no bus selected -->
+      <div id="clickHint" class="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-800/90 border border-slate-700 rounded px-4 py-2 text-xs text-slate-300 pointer-events-none hidden shadow-lg">
+        點擊匯流排 → 執行故障分析
+      </div>
+    </div>
+  </section>
+
+  <!-- VIEW 3: FAULT -->
+  <section id="view-fault" class="tab-content bg-slate-900">
+    <!-- Header -->
+    <div class="shrink-0 px-4 py-3 border-b border-slate-800 flex items-center justify-between max-w-4xl mx-auto w-full">
+      <div class="flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse"></span>
+        <span class="text-xs font-bold text-slate-300">故障分析計算結果</span>
+      </div>
+      <button onclick="App.generateReport()" class="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-600 text-white font-bold text-xs rounded shadow">📄 匯出報告</button>
+    </div>
+
+    <!-- Fault Controls -->
+    <div class="shrink-0 bg-slate-800/50 border-b border-slate-700 px-4 py-3 flex flex-col sm:flex-row gap-4 sm:items-center max-w-4xl mx-auto w-full">
+      <!-- Bus selector -->
+      <div class="flex items-center gap-2 flex-1">
+        <span class="text-xs text-slate-500 shrink-0">故障點</span>
+        <span id="selBusLabel" class="text-xs font-bold text-yellow-300 truncate bg-slate-900 px-3 py-1.5 rounded border border-slate-700 flex-1">← 請至「互動單線圖」點擊匯流排</span>
+      </div>
+      <!-- Type -->
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-slate-500 shrink-0">類型</span>
+        <select id="faultTypeSelect" class="w-32 font-bold text-red-300 py-1" style="font-size:11px" onchange="App.runFault()">
+          <option value="3ph">3Φ 三相短路</option>
+          <option value="1lg">SLG 單相接地</option>
+          <option value="2ph">LL 相間短路</option>
+          <option value="2lg">DLG 雙相接地</option>
+        </select>
+      </div>
+      <!-- Impedance -->
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-slate-500 shrink-0">Zf(pu)</span>
+        <input type="number" id="faultZ" value="0" step="0.001" min="0" class="w-20 mono py-1 text-xs" onchange="App.runFault()">
+      </div>
+    </div>
+
+    <!-- Fault Results -->
+    <div class="flex-1 overflow-y-auto p-4 max-w-4xl mx-auto w-full" id="faultPanel">
+      <div class="text-xs text-slate-600 text-center pt-20">
+        <div class="text-4xl mb-3 opacity-30">⚡</div>
+        請先切換至「互動單線圖」點擊匯流排<br>以執行故障計算
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- JSON 匯入 Modal -->
+<div id="importModal" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50 hidden">
+  <div class="bg-slate-900 border border-slate-700 rounded-lg shadow-2xl w-[520px] max-h-[80vh] flex flex-col">
+    <!-- Modal Header -->
+    <div class="shrink-0 flex items-center justify-between px-4 py-3 border-b border-slate-700">
+      <div>
+        <div class="text-sm font-bold text-indigo-300">⬆ 匯入系統參數 JSON</div>
+        <div class="text-[9px] text-slate-500 mt-0.5">貼上由 AI 辨識圖形產生的 JSON，或手動編輯後套用</div>
+      </div>
+      <button onclick="App.closeImportModal()" class="text-slate-500 hover:text-white text-lg leading-none">✕</button>
+    </div>
+    <!-- Textarea -->
+    <div class="flex-1 overflow-hidden px-4 py-3 flex flex-col gap-2 min-h-0">
+      <textarea id="importJsonText"
+        class="flex-1 w-full font-mono text-[10px] bg-slate-800 text-green-300 border border-slate-600 rounded p-2 resize-none outline-none focus:border-indigo-500"
+        placeholder='貼上 JSON，例如：
+{
+  "sBase": 25,
+  "fBase": 60,
+  "buses": [...],
+  "generators": [...],
+  "transformers": [...],
+  "circuitBreakers": [...],
+  "feeders": [...]
+}'
+      ></textarea>
+      <div id="importError" class="text-[9px] text-red-400 hidden"></div>
+    </div>
+    <!-- Notes area (if recognition_notes present) -->
+    <div id="importNotes" class="hidden shrink-0 mx-4 mb-2 bg-amber-950/50 border border-amber-700/50 rounded p-2 text-[9px] text-amber-300 max-h-24 overflow-y-auto"></div>
+    <!-- Modal Footer -->
+    <div class="shrink-0 flex gap-2 px-4 py-3 border-t border-slate-700">
+      <button onclick="App.pasteFromClipboard()" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-[10px] rounded">
+        📋 從剪貼簿貼上
+      </button>
+      <div class="flex-1"></div>
+      <button onclick="App.closeImportModal()" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-[10px] rounded">取消</button>
+      <button onclick="App.applyImportJson()" class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] rounded">
+        ✓ 套用
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- REPORT MODAL -->
+<div id="report-overlay" class="no-print">
+  <div class="rpt relative">
+    <button onclick="document.getElementById('report-overlay').style.display='none'" class="absolute top-3 right-3 text-2xl text-gray-400 hover:text-red-500 no-print">&times;</button>
+    <h1>高壓電力系統故障分析報告</h1>
+    <div id="rptBody"></div>
+    <div class="flex justify-center gap-4 mt-6 no-print">
+      <button onclick="document.getElementById('report-overlay').style.display='none'" class="px-5 py-1.5 bg-gray-200 hover:bg-gray-300 rounded font-bold text-gray-700">關閉</button>
+      <button onclick="window.print()" class="px-5 py-1.5 bg-indigo-600 hover:bg-indigo-700 rounded font-bold text-white">列印 / PDF</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const apiKey = "";
+
+// ════════════════════════════════════════════════
+// Pan / Zoom
+// ════════════════════════════════════════════════
+const PZ = {
+  s: 1, tx: 0, ty: 0,
+  dragging: false, ox: 0, oy: 0,
+
+  init() {
+    const svg = document.getElementById('sldSvg');
+    svg.addEventListener('wheel', e => { e.preventDefault(); this._wheel(e); }, { passive: false });
+    svg.addEventListener('mousedown', e => { if (e.button !== 0) return; this.dragging = true; this.ox = e.clientX - this.tx; this.oy = e.clientY - this.ty; svg.classList.add('dragging'); });
+    window.addEventListener('mousemove', e => { if (!this.dragging) return; this.tx = e.clientX - this.ox; this.ty = e.clientY - this.oy; this._apply(); });
+    window.addEventListener('mouseup', () => { this.dragging = false; document.getElementById('sldSvg').classList.remove('dragging'); });
+    svg.addEventListener('dblclick', () => this.fit());
+    // Touch support
+    let lastDist = 0, lastTx = 0, lastTy = 0;
+    svg.addEventListener('touchstart', e => {
+      if (e.touches.length === 1) { this.dragging = true; this.ox = e.touches[0].clientX - this.tx; this.oy = e.touches[0].clientY - this.ty; }
+      if (e.touches.length === 2) { lastDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); }
+    }, { passive: true });
+    svg.addEventListener('touchmove', e => {
+      e.preventDefault();
+      if (e.touches.length === 1 && this.dragging) { this.tx = e.touches[0].clientX - this.ox; this.ty = e.touches[0].clientY - this.oy; this._apply(); }
+      if (e.touches.length === 2) {
+        const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        const f = d / (lastDist || d);
+        lastDist = d;
+        const rect = svg.getBoundingClientRect();
+        const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+        const my = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+        this.tx = mx + (this.tx - mx) * f; this.ty = my + (this.ty - my) * f;
+        this.s = Math.max(0.1, Math.min(8, this.s * f));
+        this._apply();
+      }
+    }, { passive: false });
+    svg.addEventListener('touchend', () => { this.dragging = false; });
+  },
+
+  _wheel(e) {
+    const f = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    this.tx = mx + (this.tx - mx) * f; this.ty = my + (this.ty - my) * f;
+    this.s = Math.max(0.1, Math.min(8, this.s * f));
+    this._apply();
+  },
+
+  _apply() {
+    const g = document.getElementById('sld-content');
+    if (g) g.setAttribute('transform', `translate(${this.tx.toFixed(1)},${this.ty.toFixed(1)}) scale(${this.s.toFixed(4)})`);
+    document.getElementById('zoomLabel').textContent = Math.round(this.s * 100) + '%';
+  },
+
+  zoomIn()  { const svg = document.getElementById('sldSvg'); const cx = svg.clientWidth/2, cy = svg.clientHeight/2; const f=1.2; this.tx = cx+(this.tx-cx)*f; this.ty = cy+(this.ty-cy)*f; this.s=Math.min(8,this.s*f); this._apply(); },
+  zoomOut() { const svg = document.getElementById('sldSvg'); const cx = svg.clientWidth/2, cy = svg.clientHeight/2; const f=1/1.2; this.tx = cx+(this.tx-cx)*f; this.ty = cy+(this.ty-cy)*f; this.s=Math.max(0.1,this.s*f); this._apply(); },
+  reset()   { this.s=1; this.tx=0; this.ty=0; this._apply(); },
+
+  fit() {
+    const g = document.getElementById('sld-content');
+    const svg = document.getElementById('sldSvg');
+    if (!g || !svg.clientWidth) return;
+    try {
+      const bb = g.getBBox();
+      if (!bb.width || !bb.height) return;
+      const pad = 60;
+      const W = svg.clientWidth - pad * 2, H = svg.clientHeight - pad * 2;
+      const sc = Math.min(W / bb.width, H / bb.height, 2);
+      this.s = sc;
+      this.tx = pad + (W - bb.width * sc) / 2 - bb.x * sc;
+      this.ty = pad + (H - bb.height * sc) / 2 - bb.y * sc;
+      this._apply();
+    } catch (e) {}
+  }
+};
+
+// ════════════════════════════════════════════════
+// Complex number
+// ════════════════════════════════════════════════
+class C {
+  constructor(re=0,im=0){this.re=re;this.im=im;}
+  static polar(mag,deg){const r=deg*Math.PI/180;return new C(mag*Math.cos(r),mag*Math.sin(r));}
+  add(b){return new C(this.re+b.re,this.im+b.im);}
+  sub(b){return new C(this.re-b.re,this.im-b.im);}
+  mul(b){return new C(this.re*b.re-this.im*b.im,this.re*b.im+this.im*b.re);}
+  div(b){const d=b.re**2+b.im**2;if(d<1e-30)return new C(0,0);return new C((this.re*b.re+this.im*b.im)/d,(this.im*b.re-this.re*b.im)/d);}
+  inv(){const d=this.re**2+this.im**2;return d<1e-30?new C(0,0):new C(this.re/d,-this.im/d);}
+  neg(){return new C(-this.re,-this.im);}
+  par(b){return this.mul(b).div(this.add(b));}
+  mag(){return Math.sqrt(this.re**2+this.im**2);}
+  ang(){return Math.atan2(this.im,this.re)*180/Math.PI;}
+}
+
+// ════════════════════════════════════════════════
+// Complex matrix
+// ════════════════════════════════════════════════
+class CM {
+  constructor(n){this.n=n;this.d=Array.from({length:n},()=>Array.from({length:n},()=>new C()));}
+  set(i,j,v){this.d[i][j]=v;}get(i,j){return this.d[i][j];}
+  add(i,j,v){this.d[i][j]=this.d[i][j].add(v);}
+  invert(){
+    const n=this.n;
+    const a=this.d.map((row,i)=>[...row.map(c=>new C(c.re,c.im)),...Array.from({length:n},(_,j)=>i===j?new C(1,0):new C())]);
+    for(let c=0;c<n;c++){
+      let pr=c;for(let r=c+1;r<n;r++)if(a[r][c].mag()>a[pr][c].mag())pr=r;
+      [a[c],a[pr]]=[a[pr],a[c]];
+      const pv=a[c][c];if(pv.mag()<1e-14)continue;
+      for(let r=0;r<n;r++){if(r===c)continue;const f=a[r][c].div(pv);for(let k=0;k<2*n;k++)a[r][k]=a[r][k].sub(f.mul(a[c][k]));}
+      for(let k=0;k<2*n;k++)a[c][k]=a[c][k].div(pv);
+    }
+    const R=new CM(n);for(let i=0;i<n;i++)for(let j=0;j<n;j++)R.set(i,j,a[i][n+j]);return R;
+  }
+}
+
+// ════════════════════════════════════════════════
+// Default topology
+// ════════════════════════════════════════════════
+const DEFAULT = {
+  // 北山機組發電機及廠用電系統 (依原始單線圖 C版)
+  sBase:25, fBase:60,
+  buses:[
+    {id:'GRID',name:'電網(埔北線)', nominalKV:72,   isInfinite:true},
+    {id:'HV1', name:'69kV #1BUS',  nominalKV:69,   isInfinite:false},
+    {id:'HV2', name:'69kV #2BUS',  nominalKV:69,   isInfinite:false},
+    {id:'LV1', name:'11.4kV BUS',  nominalKV:11.4, isInfinite:false},
+    {id:'AUX', name:'220VAC BUS',  nominalKV:0.22, isInfinite:false}
+  ],
+  generators:[
+    // 北山機組發電機，接於 11.4kV BUS
+    {id:'G1',name:'發電機 G1',busId:'LV1',mva:22.5,mw:20,pf:0.9,
+     xdpp:0.15,xdp:0.22,xd:0.95,x2:0.16,x0:0.06,
+     grounding:'high-r',rn:5}
+  ],
+  transformers:[
+    // 主變壓器 #20TR：3Φ 25MVA，69kV/11.95kV（YN-D）
+    {id:'T1',name:'主變壓器 #20TR',busHV:'HV1',busLV:'LV1',
+     mva:25,ztPct:6.5,xrRatio:20,
+     hvWinding:'YN',hvGrounding:'solid',
+     lvWinding:'D', lvGrounding:'none',
+     ctHvP:100,ctHvS:5,ctLvP:600,ctLvS:5},
+    // HTR1 廠用電變壓器：3Φ 300kVA，6.6kV/220V，EPOXY MOLD
+    // 一次側由 11.4kV BUS 線對地取電（6.6kV = 11.4/√3）
+    // 前端保護：Power Fuse 189（7.2kV）
+    {id:'T2',name:'HTR1 廠變 #1',busHV:'LV1',busLV:'AUX',
+     mva:0.3,ztPct:5,xrRatio:10,
+     hvWinding:'D', hvGrounding:'none',
+     lvWinding:'YN',lvGrounding:'solid',
+     ctHvP:30,ctHvS:5,ctLvP:800,ctLvS:5}
+  ],
+  lines:[
+    {id:'L1',name:'埔北一線',busFrom:'GRID',busTo:'HV1',r1Pu:0.001,x1Pu:0.015,r0Pu:0.003,x0Pu:0.045,isc3ph:15,islg:10},
+    {id:'L2',name:'埔北二線',busFrom:'GRID',busTo:'HV2',r1Pu:0.001,x1Pu:0.015,r0Pu:0.003,x0Pu:0.045,isc3ph:15,islg:10}
+  ],
+  circuitBreakers:[
+    {id:'CB1', name:'613',  bus1:'GRID',bus2:'HV1',status:'closed'},
+    {id:'CB2', name:'623',  bus1:'GRID',bus2:'HV2',status:'closed'},
+    {id:'TIE', name:'720BE',bus1:'HV1', bus2:'HV2',status:'closed'},
+    // Power Fuse 189/289（7.2kV，廠變 HTR1/HTR2 前端保護）
+    {id:'PF1', name:'189 PF',bus1:'LV1',bus2:'AUX',status:'closed'},
+    {id:'PF2', name:'289 PF',bus1:'LV1',bus2:'AUX',status:'closed'}
+  ],
+  feeders:[
+    {id:'F1',name:'地方饋線',  busId:'LV1',mw:2.0},
+    {id:'F2',name:'場內用電',  busId:'LV1',mw:0.5},
+    {id:'F3',name:'#1 SSTR',  busId:'LV1',mw:0.3}
+  ]
+};
+
+// ════════════════════════════════════════════════
+// Fault Analyzer (Y-bus / Z-bus)
+// ════════════════════════════════════════════════
+const FA = {
+  buildYbus(topo, seq) {
+    const buses=topo.buses||[], idx={};
+    buses.forEach((b,i)=>{idx[b.id]=i;});
+    const n=buses.length, Y=new CM(n);
+
+    // Infinite buses
+    buses.forEach(b=>{
+      if(!b.isInfinite)return;
+      let z1=new C(0.0001,0.001);
+      (topo.lines||[]).forEach(l=>{
+        if(l.busFrom!==b.id&&l.busTo!==b.id)return;
+        if(!l.isc3ph)return;
+        const ib=(topo.sBase*1e6)/(Math.sqrt(3)*b.nominalKV*1e3);
+        const i3pu=l.isc3ph*1000/ib;
+        if(seq==='zero'&&l.islg){const ig=l.islg*1000/ib;const z0im=Math.max(0.0001,(3/ig)-(2/i3pu));z1=new C(0.0001,z0im);}
+        else{z1=new C(0.0001,1/Math.max(i3pu,0.001));}
+      });
+      Y.add(idx[b.id],idx[b.id],z1.inv());
+    });
+
+    // Generators
+    (topo.generators||[]).forEach(g=>{
+      const k=idx[g.busId];if(k===undefined)return;
+      const bus=(topo.buses||[]).find(b=>b.id===g.busId);
+      const kv=bus?.nominalKV||11.4;
+      const zBase=kv*kv/(topo.sBase||10); // Ω base
+      let x,rg=0;
+      if(seq==='pos')x=g.xdpp||0.20;
+      else if(seq==='neg')x=g.x2||0.21;
+      else{
+        const gd=g.grounding||'solid';
+        const rnOhm=g.rn||0;
+        const rnPu=rnOhm>0?rnOhm/zBase:0; // Rn in pu
+        if(gd==='solid'){x=g.x0||0.08;rg=0;}
+        else if(gd==='low-r'){x=g.x0||0.08;rg=rnPu>0?rnPu*3:0.9;}
+        else if(gd==='high-r'){x=g.x0||0.08;rg=rnPu>0?rnPu*3:150;}
+        else{x=9999;rg=0;} // isolated
+      }
+      Y.add(k,k,new C(rg+0.002,x).inv());
+    });
+
+    // Transformers
+    (topo.transformers||[]).forEach(t=>{
+      const hvi=idx[t.busHV],lvi=idx[t.busLV];if(hvi===undefined||lvi===undefined)return;
+      const zt=(t.ztPct||6.5)/100,xr=t.xrRatio||20;
+      const z_t=new C(zt/xr,zt),y_t=z_t.inv();
+      if(seq!=='zero'){Y.add(hvi,hvi,y_t);Y.add(lvi,lvi,y_t);Y.add(hvi,lvi,y_t.neg());Y.add(lvi,hvi,y_t.neg());return;}
+      const hvW=(t.hvWinding||'YN').toUpperCase(),lvW=(t.lvWinding||'D').toUpperCase();
+      const hvG=t.hvGrounding||'solid',lvG=t.lvGrounding||'none';
+      const hvGndY=(hvW==='YN'||hvW==='ZN')&&hvG!=='none';
+      const lvGndY=(lvW==='YN'||lvW==='ZN')&&lvG!=='none';
+      const hvD=hvW==='D',lvD=lvW==='D';
+      const gZ=tp=>tp==='solid'?new C(0,0):tp==='low-r'?new C(0.3,0):tp==='high-r'?new C(0,5):new C(999,0);
+      const hvZn=gZ(hvG).mul(new C(3,0)),lvZn=gZ(lvG).mul(new C(3,0));
+      if(hvGndY&&lvGndY){Y.add(hvi,hvi,y_t);Y.add(lvi,lvi,y_t);Y.add(hvi,lvi,y_t.neg());Y.add(lvi,hvi,y_t.neg());if(hvZn.mag()>0.01)Y.add(hvi,hvi,hvZn.inv());if(lvZn.mag()>0.01)Y.add(lvi,lvi,lvZn.inv());}
+      else if(hvGndY&&(lvD||!lvGndY)){Y.add(hvi,hvi,z_t.add(hvZn).inv());}
+      else if((hvD||!hvGndY)&&lvGndY){Y.add(lvi,lvi,z_t.add(lvZn).inv());}
+    });
+
+    // Lines
+    (topo.lines||[]).forEach(l=>{
+      const fi=idx[l.busFrom],ti=idx[l.busTo];if(fi===undefined||ti===undefined)return;
+      const r=seq==='zero'?(l.r0Pu||l.r1Pu*3):(l.r1Pu||0.001);
+      const x=seq==='zero'?(l.x0Pu||l.x1Pu*3):(l.x1Pu||0.015);
+      const z=new C(r,x);if(z.mag()<1e-10)return;
+      const y=z.inv();
+      Y.add(fi,fi,y);Y.add(ti,ti,y);Y.add(fi,ti,y.neg());Y.add(ti,fi,y.neg());
+    });
+    return Y;
+  },
+
+  analyze(topo,busId,ft,zf=0){
+    if(!topo)return null;
+    const idx={};(topo.buses||[]).forEach((b,i)=>{idx[b.id]=i;});
+    const k=idx[busId];if(k===undefined)return null;
+    const Z1=this.buildYbus(topo,'pos').invert();
+    const Z2=this.buildYbus(topo,'neg').invert();
+    const Z0=this.buildYbus(topo,'zero').invert();
+    const z1=Z1.get(k,k).add(new C(zf,0));
+    const z2=Z2.get(k,k),z0=Z0.get(k,k).add(new C(zf*3,0));
+    const Vf=new C(1,0),a=C.polar(1,120),a2=C.polar(1,240);
+    let I1,I2,I0;
+    if(ft==='3ph'){I1=Vf.div(z1);I2=new C();I0=new C();}
+    else if(ft==='1lg'){const I=Vf.div(z1.add(z2).add(z0));I1=I2=I0=I;}
+    else if(ft==='2ph'){I1=Vf.div(z1.add(z2));I2=I1.neg();I0=new C();}
+    else{const z20=z2.par(z0);I1=Vf.div(z1.add(z20));I2=I1.neg().mul(z0).div(z2.add(z0));I0=I1.neg().mul(z2).div(z2.add(z0));}
+    const Ia=I0.add(I1).add(I2),Ib=I0.add(a2.mul(I1)).add(a.mul(I2)),Ic=I0.add(a.mul(I1)).add(a2.mul(I2));
+
+    // Compute bus voltages at all buses using Z-bus voltage equation
+    // V1_j = 1 - Z1[j,k]*I1; V2_j = -Z2[j,k]*I2; V0_j = -Z0[j,k]*I0
+    const busVoltages={};
+    (topo.buses||[]).forEach((b,j)=>{
+      const V1j=new C(1,0).sub(Z1.get(j,k).mul(I1));
+      const V2j=Z2.get(j,k).mul(I2).neg();
+      const V0j=Z0.get(j,k).mul(I0).neg();
+      const Va=V0j.add(V1j).add(V2j);
+      const Vb=V0j.add(a2.mul(V1j)).add(a.mul(V2j));
+      const Vc=V0j.add(a.mul(V1j)).add(a2.mul(V2j));
+      busVoltages[b.id]={V1:V1j,V2:V2j,V0:V0j,Va,Vb,Vc,Vmag:V1j.mag()};
+    });
+
+    return{seq:{I0,I1,I2},phase:{Ia,Ib,Ic},I3I0:I0.mul(new C(3,0)),z1,z2,z0,busId,ft,bus:topo.buses.find(b=>b.id===busId),busVoltages};
+  }
+};
+
+// ════════════════════════════════════════════════
+// ════════════════════════════════════════════════
+// IEEE/ANSI SLD Renderer
+// ════════════════════════════════════════════════
+const SLD = {
+  BUS_W: 140, BUS_H: 4, GEN_R: 22, TX_R: 16,
+
+  busColor(kv){
+    if(kv>=220)return'#f97316';if(kv>=60)return'#f87171';
+    if(kv>=10)return'#34d399';if(kv>=1)return'#60a5fa';return'#a78bfa';
+  },
+
+  layout(topo, W, H){
+    const buses=topo.buses||[];if(!buses.length)return{};
+    const byV={};buses.forEach(b=>{if(!byV[b.nominalKV])byV[b.nominalKV]=[];byV[b.nominalKV].push(b);});
+    const volts=Object.keys(byV).map(Number).sort((a,b)=>b-a);
+    const topPad=55, botPad=50;
+    const yStep=Math.max(130,(H-topPad-botPad)/Math.max(volts.length-1,1));
+    const yMap={};volts.forEach((v,i)=>{yMap[v]=topPad+i*yStep;});
+    const pos={};
+    volts.forEach(v=>{
+      const grp=byV[v];
+      const xStep=(W*0.75)/(grp.length+1);
+      const xStart=W*0.12;
+      grp.forEach((b,i)=>{pos[b.id]={x:xStart+(i+1)*xStep,y:yMap[v]};});
+    });
+    // Align single LV bus; if HV has generator, offset LV left to avoid overlap
+    (topo.transformers||[]).forEach(t=>{
+      if(!pos[t.busHV]||!pos[t.busLV])return;
+      const lvKv=(buses.find(b=>b.id===t.busLV)||{}).nominalKV;
+      if((byV[lvKv]||[]).length===1){
+        const hvHasGen=(topo.generators||[]).some(g=>g.busId===t.busHV);
+        pos[t.busLV].x=hvHasGen?pos[t.busHV].x-this.BUS_W-15:pos[t.busHV].x;
+      }
+    });
+    return pos;
+  },
+
+  // IEEE/ANSI earth ground symbol (vertical, downward from x,y)
+  gndSvg(x,y,type){
+    if(!type||type==='none')return'';
+    const c={'solid':'#6ee7b7','low-r':'#fbbf24','high-r':'#f472b6'}[type]||'#6ee7b7';
+    // Lead wire
+    let s=`<line x1="${x}" y1="${y}" x2="${x}" y2="${y+7}" stroke="${c}" stroke-width="1.5"/>`;
+    if(type==='solid'){
+      // IEEE 3-bar earth symbol
+      s+=`<line x1="${x-10}" y1="${y+7}"  x2="${x+10}" y2="${y+7}"  stroke="${c}" stroke-width="2"/>`;
+      s+=`<line x1="${x-6.5}" y1="${y+11}" x2="${x+6.5}" y2="${y+11}" stroke="${c}" stroke-width="1.5"/>`;
+      s+=`<line x1="${x-3}"  y1="${y+15}" x2="${x+3}"  y2="${y+15}" stroke="${c}" stroke-width="1.5"/>`;
+    } else {
+      // NGR / NGT impedance box + earth below
+      const rw=12,rh=11;
+      s+=`<rect x="${x-rw/2}" y="${y+7}" width="${rw}" height="${rh}" fill="#0f172a" stroke="${c}" stroke-width="1.2" rx="1"/>`;
+      s+=`<text x="${x}" y="${y+7+rh*0.62}" text-anchor="middle" fill="${c}" font-size="6" font-family="monospace" font-weight="bold">${type==='low-r'?'Rn':'Zn'}</text>`;
+      s+=`<line x1="${x}" y1="${y+7+rh}" x2="${x}" y2="${y+7+rh+5}" stroke="${c}" stroke-width="1.2"/>`;
+      s+=`<line x1="${x-8}"  y1="${y+7+rh+5}"  x2="${x+8}"  y2="${y+7+rh+5}"  stroke="${c}" stroke-width="1.5"/>`;
+      s+=`<line x1="${x-5}"  y1="${y+7+rh+9}"  x2="${x+5}"  y2="${y+7+rh+9}"  stroke="${c}" stroke-width="1.2"/>`;
+      s+=`<line x1="${x-2.5}" y1="${y+7+rh+13}" x2="${x+2.5}" y2="${y+7+rh+13}" stroke="${c}" stroke-width="1.2"/>`;
+    }
+    return s;
+  },
+
+  // IEEE/ANSI circuit breaker square symbol at (x,y) on a line
+  cbSvg(x,y,label,status){
+    const cl=status==='closed'?'#94a3b8':'#ef4444';
+    const s=9; // half-size
+    return `<rect x="${x-s}" y="${y-s}" width="${2*s}" height="${2*s}" fill="#0f172a" stroke="${cl}" stroke-width="1.5"/>
+      <text x="${x}" y="${y+3.5}" text-anchor="middle" fill="${cl}" font-size="7.5" font-family="monospace">${label||'52'}</text>`;
+  },
+
+  // Winding label (shown outside circles)
+  windingTxt(w){return{'YN':'Y⏚','ZN':'Z⏚','Y':'Y','D':'Δ','Z':'Z'}[w.toUpperCase()]||w;},
+
+  render(topo, faultBusId, selBusId, busVoltages){
+    const svg=document.getElementById('sldSvg');
+    const W=Math.max(svg.clientWidth||700,700);
+    const H=Math.max(svg.clientHeight||520,520);
+    const pos=this.layout(topo,W,H);
+    const buses=topo.buses||[];
+    const BW=this.BUS_W,BH=this.BUS_H,GR=this.GEN_R,TR=this.TX_R;
+    let o='';
+
+    // ── Transmission lines (IEEE solid lines + CB symbol) ────────────────
+    (topo.lines||[]).forEach(l=>{
+      const fp=pos[l.busFrom],tp=pos[l.busTo];if(!fp||!tp)return;
+      const mx=(fp.x+tp.x)/2,my=(fp.y+tp.y)/2;
+      const cb=(topo.circuitBreakers||[]).find(c=>(c.bus1===l.busFrom&&c.bus2===l.busTo)||(c.bus2===l.busFrom&&c.bus1===l.busTo));
+      // Draw line in two segments around CB
+      if(cb){
+        // Direction unit vector
+        const dx=tp.x-fp.x,dy=tp.y-fp.y,len=Math.hypot(dx,dy);
+        const ux=dx/len,uy=dy/len;
+        const gap=10; // half-gap around CB
+        o+=`<line x1="${fp.x}" y1="${fp.y}" x2="${mx-ux*gap}" y2="${my-uy*gap}" stroke="#2d4a6e" stroke-width="2"/>`;
+        o+=`<line x1="${mx+ux*gap}" y1="${my+uy*gap}" x2="${tp.x}" y2="${tp.y}" stroke="#2d4a6e" stroke-width="2"/>`;
+        o+=this.cbSvg(mx,my,cb.name,cb.status);
+      } else {
+        o+=`<line x1="${fp.x}" y1="${fp.y}" x2="${tp.x}" y2="${tp.y}" stroke="#2d4a6e" stroke-width="2"/>`;
+      }
+      o+=`<text x="${mx+12}" y="${my-7}" fill="#2d4a6e" font-size="9" font-family="Noto Sans TC">${l.name||l.id}</text>`;
+    });
+
+    // ── Bus-tie (same voltage): stubs + CB in gap) ───────────────────────
+    (topo.circuitBreakers||[]).forEach(cb=>{
+      const b1=buses.find(b=>b.id===cb.bus1),b2=buses.find(b=>b.id===cb.bus2);
+      if(!b1||!b2||b1.nominalKV!==b2.nominalKV)return;
+      const hasLine=(topo.lines||[]).some(l=>(l.busFrom===cb.bus1&&l.busTo===cb.bus2)||(l.busFrom===cb.bus2&&l.busTo===cb.bus1));
+      if(hasLine)return;
+      const p1=pos[b1.id],p2=pos[b2.id];if(!p1||!p2)return;
+      const mx=(p1.x+p2.x)/2,my=p1.y;
+      const gap=10;
+      // Stubs from each bus end to CB gap
+      o+=`<line x1="${p1.x+BW/2}" y1="${p1.y}" x2="${mx-gap}" y2="${my}" stroke="#1e293b" stroke-width="2"/>`;
+      o+=this.cbSvg(mx,my,cb.name,cb.status);
+      o+=`<line x1="${mx+gap}" y1="${my}" x2="${p2.x-BW/2}" y2="${p2.y}" stroke="#1e293b" stroke-width="2"/>`;
+    });
+
+    // ── Transformers (IEEE: two tangent circles, winding labels outside) ──
+    (topo.transformers||[]).forEach(t=>{
+      const hp=pos[t.busHV],lp=pos[t.busLV];if(!hp||!lp)return;
+      const cx=lp.x,my=(hp.y+lp.y)/2;
+      const isSmall=(t.mva||10)<0.5,r=isSmall?11:TR;
+      const hvKv=(buses.find(b=>b.id===t.busHV)||{}).nominalKV||69;
+      const lvKv=(buses.find(b=>b.id===t.busLV)||{}).nominalKV||11.4;
+      const hvC=this.busColor(hvKv),lvC=this.busColor(lvKv);
+
+      // Connection wire from HV bus down to HV circle top
+      if(Math.abs(hp.x-cx)>8){
+        // L-shaped tap from left end of HV bus
+        o+=`<line x1="${hp.x-BW/2}" y1="${hp.y}" x2="${cx}" y2="${hp.y}" stroke="#334155" stroke-width="1.5"/>`;
+        o+=`<line x1="${cx}" y1="${hp.y}" x2="${cx}" y2="${my-r}" stroke="#334155" stroke-width="2"/>`;
+      } else {
+        o+=`<line x1="${cx}" y1="${hp.y}" x2="${cx}" y2="${my-r}" stroke="#334155" stroke-width="2"/>`;
+      }
+      // HV winding circle
+      o+=`<circle cx="${cx}" cy="${my-r}" r="${r}" fill="#0f172a" stroke="${hvC}" stroke-width="2"/>`;
+      // Winding label RIGHT of circle
+      o+=`<text x="${cx+r+5}" y="${my-r+4}" fill="${hvC}" font-size="${isSmall?7:9}" font-weight="bold" dominant-baseline="middle">${this.windingTxt(t.hvWinding||'YN')}</text>`;
+      // Grounding symbol LEFT of circle (for grounded neutral)
+      if((t.hvWinding==='YN'||t.hvWinding==='ZN')&&t.hvGrounding!=='none')
+        o+=this.gndSvg(cx-r-3,my-r-2,t.hvGrounding||'solid');
+      // CT label
+      o+=`<text x="${cx-r-5}" y="${my-r-r-3}" text-anchor="end" fill="#475569" font-size="7" font-family="monospace">CT ${t.ctHvP}/${t.ctHvS}</text>`;
+
+      // LV winding circle (tangent: touches HV circle at my)
+      o+=`<circle cx="${cx}" cy="${my+r}" r="${r}" fill="#0f172a" stroke="${lvC}" stroke-width="2"/>`;
+      o+=`<text x="${cx+r+5}" y="${my+r+4}" fill="${lvC}" font-size="${isSmall?7:9}" font-weight="bold" dominant-baseline="middle">${this.windingTxt(t.lvWinding||'D')}</text>`;
+      if((t.lvWinding==='YN'||t.lvWinding==='ZN')&&t.lvGrounding!=='none')
+        o+=this.gndSvg(cx-r-3,my+r*0.35,t.lvGrounding||'none');
+      o+=`<text x="${cx-r-5}" y="${my+r+r+9}" text-anchor="end" fill="#475569" font-size="7" font-family="monospace">CT ${t.ctLvP}/${t.ctLvS}</text>`;
+
+      // Wire from LV circle bottom to LV bus
+      o+=`<line x1="${cx}" y1="${my+r}" x2="${cx}" y2="${lp.y}" stroke="#334155" stroke-width="2"/>`;
+
+      // Name / rating label (right side, beside the two circles)
+      const lx=cx+r+28,ly=my;
+      o+=`<text x="${lx}" y="${ly-5}" fill="#64748b" font-size="8" font-family="Noto Sans TC">${t.name||t.id}</text>`;
+      o+=`<text x="${lx}" y="${ly+7}" fill="#475569" font-size="7.5" font-family="monospace">${t.mva}MVA  Zt=${t.ztPct}%</text>`;
+    });
+
+    // ── Generators (IEEE: circle with AC sine wave ~) ─────────────────────
+    (topo.generators||[]).forEach(g=>{
+      const bp=pos[g.busId];if(!bp)return;
+      const gy=bp.y+GR+20;
+      // Lead wire from bus to generator
+      o+=`<line x1="${bp.x}" y1="${bp.y+BH/2+1}" x2="${bp.x}" y2="${gy-GR}" stroke="#334155" stroke-width="2"/>`;
+      // Generator circle
+      o+=`<circle cx="${bp.x}" cy="${gy}" r="${GR}" fill="#0f172a" stroke="#fbbf24" stroke-width="2.5"/>`;
+      // IEEE AC generator symbol: smooth sine wave (S-curve) inside circle
+      const sw=GR*0.58;
+      o+=`<path d="M${bp.x-sw},${gy} Q${bp.x-sw*0.5},${gy-GR*0.55} ${bp.x},${gy} Q${bp.x+sw*0.5},${gy+GR*0.55} ${bp.x+sw},${gy}" stroke="#fbbf24" fill="none" stroke-width="2" stroke-linecap="round"/>`;
+      // Neutral grounding symbol (to the right)
+      o+=this.gndSvg(bp.x+GR+3,gy-5,g.grounding||'solid');
+      // Labels below generator
+      o+=`<text x="${bp.x}" y="${gy+GR+12}" text-anchor="middle" fill="#78716c" font-size="8.5" font-family="Noto Sans TC">${g.name}</text>`;
+      o+=`<text x="${bp.x}" y="${gy+GR+23}" text-anchor="middle" fill="#44403c" font-size="8" font-family="monospace">${g.mva}MVA  Xd''=${g.xdpp}</text>`;
+    });
+
+    // ── Feeders: short arrows below bus (compact, IEEE feeder arrow) ──────
+    const fbMap={};(topo.feeders||[]).forEach(f=>{if(!fbMap[f.busId])fbMap[f.busId]=[];fbMap[f.busId].push(f);});
+    Object.entries(fbMap).forEach(([busId,fds])=>{
+      const bp=pos[busId];if(!bp)return;
+      const n=fds.length,sp=Math.min(44,BW/(n+0.5));
+      const x0=bp.x-(n-1)*sp/2;
+      fds.forEach((f,i)=>{
+        const fx=x0+i*sp;
+        // Short vertical line + arrowhead
+        o+=`<line x1="${fx}" y1="${bp.y+BH/2+1}" x2="${fx}" y2="${bp.y+26}" stroke="#2d4a6e" stroke-width="1.5"/>`;
+        o+=`<polygon points="${fx},${bp.y+32} ${fx-4},${bp.y+24} ${fx+4},${bp.y+24}" fill="#2d4a6e"/>`;
+        // Rotated label
+        o+=`<text x="${fx}" y="${bp.y+46}" text-anchor="middle" fill="#334155" font-size="7.5" font-family="Noto Sans TC" transform="rotate(-40,${fx},${bp.y+46})">${f.name}</text>`;
+      });
+    });
+
+    // ── Bus bars (IEEE: bold line, clickable) ─────────────────────────────
+    buses.forEach(b=>{
+      const p=pos[b.id];if(!p)return;
+      const col=this.busColor(b.nominalKV);
+      const isFault=b.id===faultBusId,isSel=b.id===selBusId;
+      const sc=isFault?'#fbbf24':isSel?'#a78bfa':col;
+
+      if(b.isInfinite){
+        // Utility source symbol: rectangle with ∞ and voltage
+        o+=`<rect x="${p.x-34}" y="${p.y-18}" width="68" height="36" rx="3" fill="#0f172a" stroke="#4f46e5" stroke-width="1.8"/>`;
+        o+=`<line x1="${p.x-34}" y1="${p.y}" x2="${p.x+34}" y2="${p.y}" stroke="#4f46e5" stroke-width="0.8" stroke-dasharray="3,2" opacity="0.5"/>`;
+        o+=`<text x="${p.x}" y="${p.y-4}" text-anchor="middle" fill="#818cf8" font-size="9.5" font-weight="bold" font-family="monospace">GRID</text>`;
+        o+=`<text x="${p.x}" y="${p.y+10}" text-anchor="middle" fill="#4f46e5" font-size="8" font-family="monospace">${b.nominalKV}kV  ∞</text>`;
+        return;
+      }
+
+      o+=`<g class="bus-node" onclick="App.selectBus('${b.id}')">`;
+      // Hit area
+      o+=`<rect x="${p.x-BW/2-10}" y="${p.y-16}" width="${BW+20}" height="32" rx="3" fill="white" opacity="0" class="bus-hit"/>`;
+      // Fault halo
+      if(isFault)o+=`<rect x="${p.x-BW/2-6}" y="${p.y-10}" width="${BW+12}" height="20" rx="3" fill="#fbbf24" opacity=".12" class="fp"/>`;
+      // IEEE bus bar: thick bold line (not a filled box)
+      const bsw=isFault||isSel?5:3.5;
+      o+=`<line x1="${p.x-BW/2}" y1="${p.y}" x2="${p.x+BW/2}" y2="${p.y}" stroke="${sc}" stroke-width="${bsw}" stroke-linecap="round" ${isFault||isSel?'filter="url(#glow)"':''}/>`;
+      // Bus name
+      o+=`<text x="${p.x}" y="${p.y-12}" text-anchor="middle" fill="${col}" font-size="10" font-weight="bold" font-family="Noto Sans TC">${b.name}</text>`;
+      // Voltage label
+      o+=`<text x="${p.x}" y="${p.y-23}" text-anchor="middle" fill="${isSel?'#c084fc':'#475569'}" font-size="8.5" font-family="monospace">${b.nominalKV}kV</text>`;
+      if(isFault)o+=`<text x="${p.x+BW/2+12}" y="${p.y+4}" fill="#fbbf24" font-size="20" class="fp">⚡</text>`;
+      // Fault voltage display bar (below bus line)
+      if(busVoltages&&busVoltages[b.id]!==undefined){
+        const vm=busVoltages[b.id].Vmag;
+        const vc=vm>0.9?'#4ade80':vm>0.7?'#facc15':vm>0.4?'#fb923c':'#f87171';
+        o+=`<rect x="${p.x-BW/2}" y="${p.y+5}" width="${BW}" height="13" rx="2" fill="#0f172a" stroke="${vc}" stroke-width="0.8" opacity="0.92"/>`;
+        o+=`<text x="${p.x}" y="${p.y+14}" text-anchor="middle" fill="${vc}" font-size="8" font-family="monospace">V=${Math.round(vm*100)}%  ▼${Math.round((1-vm)*100)}%</text>`;
+      }
+      o+=`</g>`;
+    });
+
+    // Insert and preserve pan/zoom transform
+    const g=document.getElementById('sld-content');
+    const xform=g.getAttribute('transform')||'';
+    g.innerHTML=o;
+    if(xform)g.setAttribute('transform',xform);
+
+    // Voltage legend
+    const byV2={};buses.forEach(b=>{byV2[b.nominalKV]=true;});
+    document.getElementById('voltLegend').innerHTML=Object.keys(byV2).sort((a,b)=>b-a).map(v=>
+      `<span class="flex items-center gap-1 text-[9px] text-slate-500"><span class="inline-block w-5 h-1" style="background:${this.busColor(Number(v))}"></span>${v}kV</span>`
+    ).join('');
+    document.getElementById('hdrBase').textContent=`S_base: ${topo.sBase} MVA`;
+    document.getElementById('hdrBuses').textContent=`Buses: ${buses.length}`;
+  }
+};
+
+// ════════════════════════════════════════════════
+// Equipment list  (all params editable)
+// ════════════════════════════════════════════════
+function ni(val,step,min,cb,w){
+  // oninput = live update (SLD+fault only, no equip rebuild to preserve focus)
+  // onblur  = full refresh to sync dependent labels (Ig, kV colours, etc.)
+  return `<input type="number" value="${val}" step="${step}" min="${min||''}" class="mono ${w||'w-full'}" style="min-width:0" oninput="${cb}" onblur="App._refresh()">`;
+}
+function ti2(val,cb,cls){
+  return `<input type="text" value="${val.replace(/"/g,'&quot;')}" class="${cls||'w-full'}" style="min-width:0" oninput="${cb}" onblur="App._refresh()">`;
+}
+function renderEquipList(topo){
+  const el=document.getElementById('equipList');
+  if(!topo){el.innerHTML='<div class="text-[9px] text-slate-600 text-center pt-8">上傳圖面或點擊「載入範例」</div>';return;}
+  const WO=['YN','Y','D','ZN'],GO=['solid','low-r','high-r','none'];
+  const GL={'solid':'直接接地','low-r':'低阻抗','high-r':'高阻抗','none':'未接地'};
+  const sel=(opts,cur,cb)=>`<select class="flex-1 text-[8px]" style="min-width:0" onchange="${cb}">${opts.map(o=>`<option value="${o[0]}"${o[0]===cur?' selected':''}>${o[1]}</option>`).join('')}</select>`;
+
+  let h='';
+
+  // ── System base ──────────────────────────────
+  h+=`<div class="text-[9px] font-bold text-slate-600 uppercase tracking-wider mt-2 mb-1">系統基準</div>`;
+  h+=`<div class="eq-card" style="border-color:#6366f1">
+    <div class="flex items-center gap-1 mb-1">
+      <span class="text-[8px] text-slate-500 shrink-0" style="width:46px">S_base</span>
+      ${ni(topo.sBase,1,0.1,"App.updateSysBase('sBase',parseFloat(this.value))",'flex-1')}
+      <span class="text-[8px] text-slate-600">MVA</span>
+    </div>
+    <div class="flex items-center gap-1">
+      <span class="text-[8px] text-slate-500 shrink-0" style="width:46px">f_base</span>
+      ${ni(topo.fBase||60,1,50,"App.updateSysBase('fBase',parseFloat(this.value))",'flex-1')}
+      <span class="text-[8px] text-slate-600">Hz</span>
+    </div>
+  </div>`;
+
+  // ── Buses ────────────────────────────────────
+  h+=`<div class="text-[9px] font-bold text-slate-600 uppercase tracking-wider mt-2 mb-1">匯流排</div>`;
+  (topo.buses||[]).forEach((b,bi)=>{
+    const c=SLD.busColor(b.nominalKV);
+    h+=`<div class="eq-card" style="border-color:${c}">
+      <div class="flex items-center gap-1 mb-1">
+        ${ti2(b.name,`App.updateBus(${bi},'name',this.value)`,'flex-1 font-bold text-[9px]')}
+        ${ni(b.nominalKV,0.1,0.001,`App.updateBus(${bi},'nominalKV',parseFloat(this.value))`,'w-16')}
+        <span class="text-[8px] text-slate-600 shrink-0">kV</span>
+      </div>
+      ${b.isInfinite?`<div class="text-[8px] text-indigo-400">∞ 無限大電源匯流排</div>`:''}
+    </div>`;
+  });
+
+  // ── Generators ───────────────────────────────
+  if((topo.generators||[]).length)
+    h+=`<div class="text-[9px] font-bold text-slate-600 uppercase tracking-wider mt-2 mb-1">發電機</div>`;
+  (topo.generators||[]).forEach((g,gi)=>{
+    const gbus=(topo.buses||[]).find(b=>b.id===g.busId);
+    const gkv=gbus?.nominalKV||11.4;
+    const zBase=gkv*gkv/(topo.sBase||10);
+    const rnOhm=g.rn||0;
+    const rnPu=rnOhm>0?rnOhm/zBase:0;
+    // Approx neutral grounding current (A)
+    const iBase=(topo.sBase||10)*1e6/(Math.sqrt(3)*gkv*1e3);
+    const igA=rnPu>0?Math.round(iBase/(rnPu*3)):'—';
+    h+=`<div class="eq-card" style="border-color:#f59e0b">
+      <div class="flex items-center gap-1 mb-1">
+        ${ti2(g.name,`App.updateGen(${gi},'name',this.value)`,'flex-1 font-bold text-yellow-400 text-[9px]')}
+        ${ni(g.mva,0.5,0.1,`App.updateGen(${gi},'mva',parseFloat(this.value))`,'w-14')}
+        <span class="text-[8px] text-slate-600 shrink-0">MVA</span>
+      </div>
+      <div class="grid grid-cols-2 gap-x-1.5 gap-y-0.5 mb-1">
+        <div class="flex items-center gap-0.5">
+          <span class="text-[7px] text-slate-500 shrink-0 w-8">Xd''</span>
+          ${ni(g.xdpp,0.01,0.001,`App.updateGen(${gi},'xdpp',parseFloat(this.value))`,'flex-1')}
+        </div>
+        <div class="flex items-center gap-0.5">
+          <span class="text-[7px] text-slate-500 shrink-0 w-4">X2</span>
+          ${ni(g.x2,0.01,0.001,`App.updateGen(${gi},'x2',parseFloat(this.value))`,'flex-1')}
+        </div>
+        <div class="flex items-center gap-0.5">
+          <span class="text-[7px] text-slate-500 shrink-0 w-8">Xd'</span>
+          ${ni(g.xdp||0.22,0.01,0.001,`App.updateGen(${gi},'xdp',parseFloat(this.value))`,'flex-1')}
+        </div>
+        <div class="flex items-center gap-0.5">
+          <span class="text-[7px] text-slate-500 shrink-0 w-4">X0</span>
+          ${ni(g.x0,0.01,0,`App.updateGen(${gi},'x0',parseFloat(this.value))`,'flex-1')}
+        </div>
+      </div>
+      <div class="flex items-center gap-1 mb-0.5">
+        <span class="text-[8px] text-slate-500 shrink-0">接地：</span>
+        ${sel(GO.map(o=>[o,GL[o]]),g.grounding||'solid',`App.updateGen(${gi},'grounding',this.value)`)}
+      </div>
+      <div class="flex items-center gap-1">
+        <span class="text-[7px] text-slate-500 shrink-0" style="width:40px">Rn (Ω)</span>
+        ${ni(g.rn||0,1,0,`App.updateGen(${gi},'rn',parseFloat(this.value))`,'flex-1')}
+        <span class="mono text-[7px] text-pink-400 shrink-0 ml-1">Ig≈${igA}A</span>
+      </div>
+    </div>`;
+  });
+
+  // ── Transformers ─────────────────────────────
+  if((topo.transformers||[]).length)
+    h+=`<div class="text-[9px] font-bold text-slate-600 uppercase tracking-wider mt-2 mb-1">變壓器</div>`;
+  (topo.transformers||[]).forEach((t,ti)=>{
+    const hvBusIdx=(topo.buses||[]).findIndex(b=>b.id===t.busHV);
+    const lvBusIdx=(topo.buses||[]).findIndex(b=>b.id===t.busLV);
+    const hvKv=hvBusIdx>=0?(topo.buses[hvBusIdx].nominalKV||0):0;
+    const lvKv=lvBusIdx>=0?(topo.buses[lvBusIdx].nominalKV||0):0;
+    const hc=SLD.busColor(hvKv),lc=SLD.busColor(lvKv);
+    h+=`<div class="eq-card" style="border-color:#38bdf8">
+      <div class="flex items-center gap-1 mb-1">
+        ${ti2(t.name,`App.updateTx(${ti},'name',this.value)`,'flex-1 font-bold text-sky-400 text-[9px]')}
+      </div>
+      <div class="grid grid-cols-3 gap-x-1 gap-y-0.5 mb-1">
+        <div class="flex items-center gap-0.5">
+          <span class="text-[7px] text-slate-500 shrink-0">MVA</span>
+          ${ni(t.mva,0.1,0.001,`App.updateTx(${ti},'mva',parseFloat(this.value))`,'flex-1')}
+        </div>
+        <div class="flex items-center gap-0.5">
+          <span class="text-[7px] text-slate-500 shrink-0">Zt%</span>
+          ${ni(t.ztPct,0.1,0.01,`App.updateTx(${ti},'ztPct',parseFloat(this.value))`,'flex-1')}
+        </div>
+        <div class="flex items-center gap-0.5">
+          <span class="text-[7px] text-slate-500 shrink-0">X/R</span>
+          ${ni(t.xrRatio,1,1,`App.updateTx(${ti},'xrRatio',parseFloat(this.value))`,'flex-1')}
+        </div>
+      </div>
+      <div class="space-y-0.5 mb-1">
+        <div class="flex items-center gap-1">
+          <span class="text-[7px] shrink-0 w-4" style="color:${hc}">HV</span>
+          ${ni(hvKv,0.1,0.001,hvBusIdx>=0?`App.updateBus(${hvBusIdx},'nominalKV',parseFloat(this.value))`:`void(0)`,'w-14')}
+          <span class="text-[7px] text-slate-600 shrink-0">kV</span>
+          ${sel(WO.map(w=>[w,w]),t.hvWinding||'YN',`App.updateTx(${ti},'hvWinding',this.value)`)}
+          ${sel(GO.map(g=>[g,GL[g]]),t.hvGrounding||'solid',`App.updateTx(${ti},'hvGrounding',this.value)`)}
+        </div>
+        <div class="flex items-center gap-1">
+          <span class="text-[7px] shrink-0 w-4" style="color:${lc}">LV</span>
+          ${ni(lvKv,0.1,0.001,lvBusIdx>=0?`App.updateBus(${lvBusIdx},'nominalKV',parseFloat(this.value))`:`void(0)`,'w-14')}
+          <span class="text-[7px] text-slate-600 shrink-0">kV</span>
+          ${sel(WO.map(w=>[w,w]),t.lvWinding||'D',`App.updateTx(${ti},'lvWinding',this.value)`)}
+          ${sel(GO.map(g=>[g,GL[g]]),t.lvGrounding||'none',`App.updateTx(${ti},'lvGrounding',this.value)`)}
+        </div>
+      </div>
+      <div class="text-[7px] text-slate-500 mb-0.5">CT (一次/二次)</div>
+      <div class="grid grid-cols-2 gap-x-1.5 gap-y-0.5">
+        <div class="flex items-center gap-0.5">
+          <span class="text-[7px] text-slate-600 shrink-0">HV-P</span>
+          ${ni(t.ctHvP||200,50,1,`App.updateTx(${ti},'ctHvP',parseFloat(this.value))`,'flex-1')}
+        </div>
+        <div class="flex items-center gap-0.5">
+          <span class="text-[7px] text-slate-600 shrink-0">HV-S</span>
+          ${ni(t.ctHvS||5,1,1,`App.updateTx(${ti},'ctHvS',parseFloat(this.value))`,'flex-1')}
+        </div>
+        <div class="flex items-center gap-0.5">
+          <span class="text-[7px] text-slate-600 shrink-0">LV-P</span>
+          ${ni(t.ctLvP||600,50,1,`App.updateTx(${ti},'ctLvP',parseFloat(this.value))`,'flex-1')}
+        </div>
+        <div class="flex items-center gap-0.5">
+          <span class="text-[7px] text-slate-600 shrink-0">LV-S</span>
+          ${ni(t.ctLvS||5,1,1,`App.updateTx(${ti},'ctLvS',parseFloat(this.value))`,'flex-1')}
+        </div>
+      </div>
+    </div>`;
+  });
+
+  // ── Lines ────────────────────────────────────
+  if((topo.lines||[]).length){
+    h+=`<div class="text-[9px] font-bold text-slate-600 uppercase tracking-wider mt-2 mb-1">線路 / 系統電源</div>`;
+    (topo.lines||[]).forEach((l,li)=>{
+      h+=`<div class="eq-card" style="border-color:#475569">
+        <div class="flex items-center gap-1 mb-1">
+          ${ti2(l.name||l.id,`App.updateLine(${li},'name',this.value)`,'flex-1 text-slate-300 font-bold text-[9px]')}
+        </div>
+        <div class="text-[7px] text-slate-600 mb-0.5">序阻抗 (pu)</div>
+        <div class="grid grid-cols-2 gap-x-1.5 gap-y-0.5 mb-1">
+          <div class="flex items-center gap-0.5">
+            <span class="text-[7px] text-slate-500 shrink-0 w-8">R1</span>
+            ${ni(l.r1Pu||0.001,0.001,0,`App.updateLine(${li},'r1Pu',parseFloat(this.value))`,'flex-1')}
+          </div>
+          <div class="flex items-center gap-0.5">
+            <span class="text-[7px] text-slate-500 shrink-0 w-8">X1</span>
+            ${ni(l.x1Pu||0.015,0.001,0,`App.updateLine(${li},'x1Pu',parseFloat(this.value))`,'flex-1')}
+          </div>
+          <div class="flex items-center gap-0.5">
+            <span class="text-[7px] text-slate-500 shrink-0 w-8">R0</span>
+            ${ni(l.r0Pu||0.003,0.001,0,`App.updateLine(${li},'r0Pu',parseFloat(this.value))`,'flex-1')}
+          </div>
+          <div class="flex items-center gap-0.5">
+            <span class="text-[7px] text-slate-500 shrink-0 w-8">X0</span>
+            ${ni(l.x0Pu||0.045,0.001,0,`App.updateLine(${li},'x0Pu',parseFloat(this.value))`,'flex-1')}
+          </div>
+        </div>
+        <div class="text-[7px] text-slate-600 mb-0.5">系統短路電流 (kA)</div>
+        <div class="grid grid-cols-2 gap-x-1.5 gap-y-0.5">
+          <div class="flex items-center gap-0.5">
+            <span class="text-[7px] text-slate-500 shrink-0 w-8">3Φ</span>
+            ${ni(l.isc3ph||15,0.5,0.1,`App.updateLine(${li},'isc3ph',parseFloat(this.value))`,'flex-1')}
+          </div>
+          <div class="flex items-center gap-0.5">
+            <span class="text-[7px] text-slate-500 shrink-0 w-8">SLG</span>
+            ${ni(l.islg||10,0.5,0.1,`App.updateLine(${li},'islg',parseFloat(this.value))`,'flex-1')}
+          </div>
+        </div>
+      </div>`;
+    });
+  }
+
+  // ── Feeders ──────────────────────────────────
+  if((topo.feeders||[]).length){
+    h+=`<div class="text-[9px] font-bold text-slate-600 uppercase tracking-wider mt-2 mb-1">配電饋線</div>`;
+    (topo.feeders||[]).forEach((f,fi)=>{
+      h+=`<div class="eq-card" style="border-color:#1e3a5f">
+        <div class="flex items-center gap-1">
+          ${ti2(f.name||f.id,`App.updateFeeder(${fi},'name',this.value)`,'flex-1 text-slate-400 text-[9px]')}
+          ${ni(f.mw||1,0.1,0,`App.updateFeeder(${fi},'mw',parseFloat(this.value))`,'w-14')}
+          <span class="text-[8px] text-slate-600 shrink-0">MW</span>
+        </div>
+      </div>`;
+    });
+  }
+
+  el.innerHTML=h;
+}
+
+// ════════════════════════════════════════════════
+// Fault panel
+// ════════════════════════════════════════════════
+function renderFaultPanel(res,topo){
+  const el=document.getElementById('faultPanel');
+  if(!res){el.innerHTML='<div class="text-[9px] text-slate-600 text-center pt-12">選擇匯流排後顯示</div>';return;}
+  const bus=res.bus,kv=bus.nominalKV;
+  const ib=(topo.sBase*1e6)/(Math.sqrt(3)*kv*1e3);
+  let ctP=1,ctS=1;
+  (topo.transformers||[]).forEach(t=>{
+    if(t.busHV===bus.id){ctP=t.ctHvP||1;ctS=t.ctHvS||1;}
+    else if(t.busLV===bus.id){ctP=t.ctLvP||1;ctS=t.ctLvS||1;}
+  });
+  const ctR=ctP/ctS;
+  const ftMap={'3ph':'3Φ三相','1lg':'SLG接地','2ph':'LL相間','2lg':'DLG雙相接地'};
+  const kA=(res.phase.Ia.mag()*ib/1000).toFixed(3);
+
+  const row=(lbl,cv,col)=>{
+    const A=(cv.mag()*ib).toFixed(0),sec=(cv.mag()*ib/ctR).toFixed(2),pu=cv.mag().toFixed(4);
+    return `<tr><td class="py-0.5 pr-1 text-slate-500">${lbl}</td>
+      <td class="py-0.5 mono ${col}">${A}A</td>
+      <td class="py-0.5 mono text-purple-400">${sec}A</td>
+      <td class="py-0.5 mono text-slate-600">${pu}</td></tr>`;
+  };
+
+  let h=`
+  <div class="bg-slate-950 rounded p-2 mb-2">
+    <div class="text-[10px] font-bold text-yellow-300">${ftMap[res.ft]}</div>
+    <div class="text-[9px] text-slate-500">${bus.name} · ${kv}kV</div>
+    <div class="text-[8.5px] text-slate-600 mono">I_base=${ib.toFixed(0)}A · CT=${ctP}/${ctS}</div>
+    <div class="text-base font-bold text-red-300 mt-1 mono">${kA} kA</div>
+  </div>
+  <div class="text-[8px] font-bold text-slate-600 uppercase mb-0.5">相電流 (一次|CT二次|pu)</div>
+  <table class="w-full text-[8.5px] mb-2">
+    <tbody>
+      ${row('Ia',res.phase.Ia,'text-red-300')}
+      ${row('Ib',res.phase.Ib,'text-green-300')}
+      ${row('Ic',res.phase.Ic,'text-blue-300')}
+      ${row('3I₀',res.I3I0,'text-orange-300')}
+    </tbody>
+  </table>
+  <div class="text-[8px] font-bold text-slate-600 uppercase mb-0.5">對稱分量序電流</div>
+  <table class="w-full text-[8.5px] mb-2">
+    <tbody>
+      ${row('I₁ 正序',res.seq.I1,'text-cyan-300')}
+      ${row('I₂ 負序',res.seq.I2,'text-pink-300')}
+      ${row('I₀ 零序',res.seq.I0,'text-orange-300')}
+    </tbody>
+  </table>
+  <div class="text-[8px] font-bold text-slate-600 uppercase mb-0.5">Thévenin Z (pu)</div>
+  <div class="bg-slate-950 rounded p-1.5 mono text-[8px] space-y-0.5">
+    <div>Z₁=${res.z1.re.toFixed(5)}+j${res.z1.im.toFixed(5)}</div>
+    <div>Z₂=${res.z2.re.toFixed(5)}+j${res.z2.im.toFixed(5)}</div>
+    <div>Z₀=${res.z0.re.toFixed(5)}+j${res.z0.im.toFixed(5)}</div>
+  </div>`;
+
+  const I3A=res.I3I0.mag()*ib,IaA=res.phase.Ia.mag()*ib;
+  let assess='';
+  if(res.ft==='1lg'&&I3A>50)assess+=`<li>3I₀=${(I3A/1000).toFixed(2)}kA → 51N/67N接地過流</li>`;
+  if(IaA>ib*0.3)assess+=`<li>Ia=${(IaA/1000).toFixed(2)}kA → 87T差動/50過流</li>`;
+  if(res.seq.I2.mag()>0.05)assess+=`<li>I₂負序 → 46負序保護</li>`;
+  if(assess)h+=`<div class="mt-2 bg-red-950/30 border border-red-900/50 rounded p-1.5">
+    <div class="text-[8px] font-bold text-red-400 mb-0.5">⚠ 保護評估</div>
+    <ul class="text-[8px] text-red-300 list-disc pl-3 space-y-0.5">${assess}</ul></div>`;
+
+  // Voltage profile table
+  if(res.busVoltages&&topo){
+    h+=`<div class="text-[8px] font-bold text-slate-600 uppercase mb-0.5 mt-3">各節點電壓（故障中）</div>`;
+    h+=`<table class="w-full text-[8px] mb-2"><thead><tr>
+      <th class="text-left text-slate-500 pb-0.5">匯流排</th>
+      <th class="text-right text-slate-500 pb-0.5">V₁(pu)</th>
+      <th class="text-right text-slate-500 pb-0.5">|Va|(pu)</th>
+      <th class="text-right text-slate-500 pb-0.5">壓降%</th>
+    </tr></thead><tbody>`;
+    (topo.buses||[]).forEach(b=>{
+      if(b.isInfinite)return;
+      const bv=res.busVoltages[b.id];if(!bv)return;
+      const vm=bv.Vmag,vam=bv.Va.mag();
+      const vc=vm>0.9?'#4ade80':vm>0.7?'#facc15':vm>0.4?'#fb923c':'#f87171';
+      const isFlt=b.id===res.busId;
+      h+=`<tr${isFlt?' style="background:#1c1917"':''}>
+        <td class="py-0.5 pr-1 ${isFlt?'text-yellow-300 font-bold':'text-slate-400'}">${b.name}</td>
+        <td class="py-0.5 text-right mono" style="color:${vc}">${vm.toFixed(4)}</td>
+        <td class="py-0.5 text-right mono text-slate-500">${vam.toFixed(4)}</td>
+        <td class="py-0.5 text-right mono" style="color:${vc}">${((1-vm)*100).toFixed(1)}%</td>
+      </tr>`;
+    });
+    h+=`</tbody></table>`;
+    const minV=Math.min(...Object.values(res.busVoltages).map(v=>v.Vmag));
+    const maxDrop=((1-minV)*100).toFixed(1);
+    h+=`<div class="mono text-[8px] text-slate-600">最大壓降：<span class="text-orange-400">${maxDrop}%</span>（正序 V₁）</div>`;
+  }
+
+  el.innerHTML=h;
+}
+
+// ════════════════════════════════════════════════
+// App
+// ════════════════════════════════════════════════
+const App={
+  topo:null, selBusId:null, faultRes:null,
+
+  switchTab(tabId) {
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('nav button').forEach(el => {
+      el.classList.remove('border-indigo-500', 'text-indigo-400');
+      el.classList.add('border-transparent', 'text-slate-400');
+    });
+    document.getElementById(`view-${tabId}`).classList.add('active');
+    const btn = document.getElementById(`tabBtn-${tabId}`);
+    btn.classList.remove('border-transparent', 'text-slate-400');
+    btn.classList.add('border-indigo-500', 'text-indigo-400');
+    if (tabId === 'sld') setTimeout(() => PZ.fit(), 50);
+  },
+
+  loadDefault(){
+    this.topo=JSON.parse(JSON.stringify(DEFAULT));
+    this.selBusId=null;this.faultRes=null;
+    renderEquipList(this.topo);
+    SLD.render(this.topo,null,null);
+    renderFaultPanel(null,null);
+    document.getElementById('selBusLabel').textContent='← 請至「互動單線圖」點擊匯流排';
+    const h=document.getElementById('clickHint');if(h)h.classList.remove('hidden');
+    setTimeout(()=>PZ.fit(),150);
+    this.switchTab('sld');
+  },
+
+  // ── JSON 匯入 ────────────────────────────────────────────
+  openImportModal(){
+    document.getElementById('importJsonText').value='';
+    document.getElementById('importError').classList.add('hidden');
+    document.getElementById('importNotes').classList.add('hidden');
+    document.getElementById('importModal').classList.remove('hidden');
+    setTimeout(()=>document.getElementById('importJsonText').focus(),80);
+  },
+
+  closeImportModal(){
+    document.getElementById('importModal').classList.add('hidden');
+  },
+
+  async pasteFromClipboard(){
+    try{
+      const text=await navigator.clipboard.readText();
+      document.getElementById('importJsonText').value=text;
+    }catch(e){
+      document.getElementById('importError').textContent='無法存取剪貼簿，請手動貼上 (Ctrl+V)';
+      document.getElementById('importError').classList.remove('hidden');
+    }
+  },
+
+  applyImportJson(){
+    const errEl=document.getElementById('importError');
+    const notesEl=document.getElementById('importNotes');
+    errEl.classList.add('hidden');
+    notesEl.classList.add('hidden');
+
+    let raw;
+    try{
+      raw=JSON.parse(document.getElementById('importJsonText').value);
+    }catch(e){
+      errEl.textContent='JSON 格式錯誤：'+e.message;
+      errEl.classList.remove('hidden');
+      return;
+    }
+
+    // 驗證必要欄位
+    if(!raw.buses||!Array.isArray(raw.buses)||raw.buses.length===0){
+      errEl.textContent='缺少必要欄位：buses（匯流排陣列不得為空）';
+      errEl.classList.remove('hidden');
+      return;
+    }
+
+    // 合併至 DEFAULT 結構（保留未提供的欄位用預設值補全）
+    const topo={
+      sBase: raw.sBase||DEFAULT.sBase,
+      fBase: raw.fBase||DEFAULT.fBase,
+      buses: (raw.buses||[]).map((b,i)=>({
+        id: b.id||`BUS${i+1}`,
+        name: b.name||b.id||`匯流排${i+1}`,
+        nominalKV: Number(b.nominalKV)||1,
+        isInfinite: !!b.isInfinite
+      })),
+      generators: (raw.generators||[]).map((g,i)=>({
+        id: g.id||`G${i+1}`,
+        name: g.name||g.id||`發電機${i+1}`,
+        busId: g.busId||'',
+        mva: Number(g.mva)||10,
+        mw:  Number(g.mw)||(Number(g.mva)*0.9)||9,
+        pf:  Number(g.pf)||0.9,
+        xdpp: Number(g.xdpp)||0.15,
+        xdp:  Number(g.xdp)||0.22,
+        xd:   Number(g.xd)||0.95,
+        x2:   Number(g.x2)||0.16,
+        x0:   Number(g.x0)||0.06,
+        grounding: g.grounding||'solid',
+        rn: Number(g.rn)||0
+      })),
+      transformers: (raw.transformers||[]).map((t,i)=>({
+        id: t.id||`T${i+1}`,
+        name: t.name||t.id||`變壓器${i+1}`,
+        busHV: t.busHV||'',
+        busLV: t.busLV||'',
+        mva: Number(t.mva)||10,
+        ztPct: Number(t.ztPct)||6,
+        xrRatio: Number(t.xrRatio)||10,
+        connHV: t.connHV||'YN',
+        connLV: t.connLV||'D'
+      })),
+      circuitBreakers: (raw.circuitBreakers||[]).map((c,i)=>({
+        id: c.id||`CB${i+1}`,
+        name: c.name||c.id||`斷路器${i+1}`,
+        bus1: c.bus1||'',
+        bus2: c.bus2||'',
+        status: c.status||'closed'
+      })),
+      feeders: (raw.feeders||[]).map((f,i)=>({
+        id: f.id||`F${i+1}`,
+        name: f.name||f.id||`饋線${i+1}`,
+        busId: f.busId||'',
+        mw: Number(f.mw)||1
+      }))
+    };
+
+    // 套用
+    this.topo=topo;
+    this.selBusId=null;
+    this.faultRes=null;
+    renderEquipList(topo);
+    SLD.render(topo,null,null);
+    renderFaultPanel(null,null);
+    document.getElementById('selBusLabel').textContent='← 請至「互動單線圖」點擊匯流排';
+    const h=document.getElementById('clickHint');if(h)h.classList.remove('hidden');
+    setTimeout(()=>PZ.fit(),150);
+    this.switchTab('sld');
+
+    // 顯示辨識備註
+    if(raw.recognition_notes&&raw.recognition_notes.length>0){
+      notesEl.innerHTML='<div class="font-bold mb-1">⚠ 辨識備註（請確認以下項目）：</div>'
+        +raw.recognition_notes.map(n=>`<div class="mb-0.5">${n}</div>`).join('');
+      notesEl.classList.remove('hidden');
+      // 不立即關閉 modal，讓使用者看到備註
+      errEl.textContent='';
+      errEl.classList.add('hidden');
+      document.getElementById('importJsonText').value='✓ 已成功匯入 '
+        +topo.buses.length+'個匯流排、'
+        +topo.generators.length+'個發電機、'
+        +topo.transformers.length+'個變壓器';
+    }else{
+      this.closeImportModal();
+    }
+  },
+  // ─────────────────────────────────────────────────────────
+
+  selectBus(id){
+    this.selBusId=id;
+    const b=(this.topo?.buses||[]).find(b=>b.id===id);
+    document.getElementById('selBusLabel').textContent=b?`${b.name} (${b.nominalKV}kV)`:id;
+    const h=document.getElementById('clickHint');if(h)h.classList.add('hidden');
+    this.runFault();
+    this.switchTab('fault');
+  },
+
+  runFault(){
+    if(!this.selBusId||!this.topo)return;
+    const ft=document.getElementById('faultTypeSelect').value;
+    const zf=parseFloat(document.getElementById('faultZ').value)||0;
+    this.faultRes=FA.analyze(this.topo,this.selBusId,ft,zf);
+    renderFaultPanel(this.faultRes,this.topo);
+    SLD.render(this.topo,this.selBusId,this.selBusId,this.faultRes?.busVoltages);
+  },
+
+  showSyncToast(){
+    const t = document.getElementById('syncToast');
+    if(!t) return;
+    t.classList.remove('opacity-0', '-translate-y-2');
+    t.classList.add('opacity-100', 'translate-y-0');
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => {
+      t.classList.remove('opacity-100', 'translate-y-0');
+      t.classList.add('opacity-0', '-translate-y-2');
+    }, 1500);
+  },
+
+  _refresh(skipEquip){
+    if(!skipEquip)renderEquipList(this.topo);
+    SLD.render(this.topo,this.selBusId,this.selBusId,this.faultRes?.busVoltages);
+    this.runFault();
+    this.showSyncToast();
+  },
+
+  updateSysBase(field,val){
+    if(!this.topo)return;
+    this.topo[field]=val;
+    this._refresh(true);
+  },
+
+  updateBus(idx,field,val){
+    if(!this.topo?.buses?.[idx])return;
+    this.topo.buses[idx][field]=val;
+    this._refresh(true); // skipEquip: preserve input focus
+  },
+
+  updateTx(idx,field,val){
+    if(!this.topo?.transformers?.[idx])return;
+    this.topo.transformers[idx][field]=val;
+    this._refresh(true);
+  },
+
+  updateGen(idx,field,val){
+    if(!this.topo?.generators?.[idx])return;
+    this.topo.generators[idx][field]=val;
+    this._refresh(true);
+  },
+
+  updateLine(idx,field,val){
+    if(!this.topo?.lines?.[idx])return;
+    this.topo.lines[idx][field]=val;
+    this._refresh(true);
+  },
+
+  updateFeeder(idx,field,val){
+    if(!this.topo?.feeders?.[idx])return;
+    this.topo.feeders[idx][field]=val;
+    this._refresh(true);
+  },
+
+  async handleUpload(ev){
+    const file=ev.target.files[0];if(!file)return;
+    document.getElementById('uploadIdle').classList.add('hidden');
+    document.getElementById('uploadBusy').classList.remove('hidden');
+    const errBox = document.getElementById('equipList');
+
+    try{
+      const b64=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result.split(',')[1]);fr.readAsDataURL(file);});
+      const prompt=`You are a Power System Protection Engineer. Parse this SLD or engineering document for a Taiwan (TPC) power system.
+Extract the complete network topology. Return ONLY valid JSON matching the schema.
+
+Rules:
+- hvWinding/lvWinding: "YN","Y","D","ZN"
+- hvGrounding/lvGrounding/grounding: "solid","low-r","high-r","none"
+- isInfinite:true for grid/infinite bus
+- Create separate bus entries for #1BUS and #2BUS at same voltage
+- Look for: 69kV, 11.4kV, 6.9kV, 345kV, 161kV buses; CT ratios; transformer specs`;
+
+      const url=`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+      
+      // 強制要求 API 回傳嚴格的 JSON 結構 (避免任何 Markdown 或格式錯誤)
+      const schema = {
+        type: "OBJECT",
+        properties: {
+          sBase: { type: "NUMBER" }, fBase: { type: "NUMBER" },
+          buses: { type: "ARRAY", items: { type: "OBJECT", properties: { id: {type:"STRING"}, name: {type:"STRING"}, nominalKV: {type:"NUMBER"}, isInfinite: {type:"BOOLEAN"} } } },
+          generators: { type: "ARRAY", items: { type: "OBJECT", properties: { id: {type:"STRING"}, name: {type:"STRING"}, busId: {type:"STRING"}, mva: {type:"NUMBER"}, mw: {type:"NUMBER"}, pf: {type:"NUMBER"}, xdpp: {type:"NUMBER"}, xdp: {type:"NUMBER"}, xd: {type:"NUMBER"}, x2: {type:"NUMBER"}, x0: {type:"NUMBER"}, grounding: {type:"STRING"}, rn: {type:"NUMBER"} } } },
+          transformers: { type: "ARRAY", items: { type: "OBJECT", properties: { id: {type:"STRING"}, name: {type:"STRING"}, busHV: {type:"STRING"}, busLV: {type:"STRING"}, mva: {type:"NUMBER"}, ztPct: {type:"NUMBER"}, xrRatio: {type:"NUMBER"}, hvWinding: {type:"STRING"}, hvGrounding: {type:"STRING"}, lvWinding: {type:"STRING"}, lvGrounding: {type:"STRING"}, ctHvP: {type:"NUMBER"}, ctHvS: {type:"NUMBER"}, ctLvP: {type:"NUMBER"}, ctLvS: {type:"NUMBER"} } } },
+          lines: { type: "ARRAY", items: { type: "OBJECT", properties: { id: {type:"STRING"}, name: {type:"STRING"}, busFrom: {type:"STRING"}, busTo: {type:"STRING"}, r1Pu: {type:"NUMBER"}, x1Pu: {type:"NUMBER"}, r0Pu: {type:"NUMBER"}, x0Pu: {type:"NUMBER"}, isc3ph: {type:"NUMBER"}, islg: {type:"NUMBER"} } } },
+          circuitBreakers: { type: "ARRAY", items: { type: "OBJECT", properties: { id: {type:"STRING"}, name: {type:"STRING"}, bus1: {type:"STRING"}, bus2: {type:"STRING"}, status: {type:"STRING"} } } },
+          feeders: { type: "ARRAY", items: { type: "OBJECT", properties: { id: {type:"STRING"}, name: {type:"STRING"}, busId: {type:"STRING"}, mw: {type:"NUMBER"} } } }
+        }
+      };
+
+      const payload={
+        contents:[{role: "user", parts:[{text:prompt},{inlineData:{mimeType:file.type,data:b64}}]}],
+        generationConfig:{ responseMimeType:'application/json', responseSchema: schema }
+      };
+      
+      let data;
+      for(let i=0;i<4;i++){
+        try{
+          const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+          if(!r.ok){
+            const errTxt = await r.text();
+            throw new Error(`HTTP ${r.status}: ${errTxt}`);
+          }
+          data=await r.json();
+          break;
+        }catch(e){
+          if(i===3)throw e;
+          await new Promise(r=>setTimeout(r,1500*(i+1)));
+        }
+      }
+      
+      let rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if(!rawText) throw new Error("API 未回傳有效的內容");
+      
+      this.topo=JSON.parse(rawText);
+      this.selBusId=null;this.faultRes=null;
+      renderEquipList(this.topo);SLD.render(this.topo,null,null);renderFaultPanel(null,null);
+      document.getElementById('selBusLabel').textContent='← 請至「互動單線圖」點擊匯流排';
+      const _h=document.getElementById('clickHint');if(_h)_h.classList.remove('hidden');
+      setTimeout(()=>PZ.fit(),150);
+      this.switchTab('sld');
+    }catch(e){
+      console.error(e);
+      let msg = e.message;
+      if(msg.includes("API_KEY_INVALID") || msg.includes("API key not valid")) {
+        msg = "API Key 驗證失敗或未設定，請確認您的環境權限。";
+      }
+      errBox.innerHTML=`<div class="text-[10px] text-red-400 p-3 bg-red-950/30 rounded border border-red-900/50 mt-2">
+        <b>❌ 解析失敗</b><br><span class="font-mono text-[9px] text-red-300 break-words">${msg.substring(0, 200)}</span><br><br>
+        請確認：<br>1. 若本機執行，請在原始碼中填入 API Key。<br>2. 檔案是否有效 (支援 JPG/PNG/PDF)。
+      </div>`;
+      this.switchTab('equip');
+    }finally{
+      document.getElementById('uploadBusy').classList.add('hidden');
+      document.getElementById('uploadIdle').classList.remove('hidden');
+      document.getElementById('fileInput').value='';
+    }
+  },
+
+  generateReport(){
+    const topo=this.topo,res=this.faultRes;
+    const GL={'solid':'直接接地','low-r':'低阻抗接地','high-r':'高阻抗接地','none':'未接地'};
+    let h=`<h2>1. 系統設備參數</h2><table><tr><th>項目</th><th>數值</th><th>備註</th></tr>`;
+    if(topo){
+      h+=`<tr><td>系統基準</td><td>${topo.sBase}MVA / ${topo.fBase||60}Hz</td><td>S_base, f_base</td></tr>`;
+      (topo.buses||[]).forEach(b=>{const ib=((topo.sBase*1e6)/(Math.sqrt(3)*b.nominalKV*1e3)).toFixed(0);h+=`<tr><td>${b.name}</td><td>${b.nominalKV}kV</td><td>I_base=${ib}A</td></tr>`;});
+      (topo.generators||[]).forEach(g=>{h+=`<tr><td>${g.name}</td><td>${g.mva}MVA / ${g.mw}MW</td><td>Xd''=${g.xdpp} X2=${g.x2} X0=${g.x0} ${GL[g.grounding||'solid']}</td></tr>`;});
+      (topo.transformers||[]).forEach(t=>{h+=`<tr><td>${t.name}</td><td>${t.mva}MVA Zt=${t.ztPct}%</td><td>HV:${t.hvWinding}(${GL[t.hvGrounding||'solid']}) LV:${t.lvWinding}(${GL[t.lvGrounding||'none']})</td></tr>`;});
+    }
+    h+=`</table>`;
+    if(res&&topo){
+      const bus=res.bus,kv=bus.nominalKV,ib=(topo.sBase*1e6)/(Math.sqrt(3)*kv*1e3);
+      let ctP=1,ctS=1;(topo.transformers||[]).forEach(t=>{if(t.busHV===bus.id){ctP=t.ctHvP||1;ctS=t.ctHvS||1;}else if(t.busLV===bus.id){ctP=t.ctLvP||1;ctS=t.ctLvS||1;}});
+      const ctR=ctP/ctS,fA=c=>`${(c.mag()*ib).toFixed(0)}A`,fS=c=>`${(c.mag()*ib/ctR).toFixed(2)}A`;
+      const ftN={'3ph':'三相短路','1lg':'單相接地','2ph':'相間短路','2lg':'雙相接地'};
+      h+=`<h2>2. 故障計算結果</h2>
+      <p>故障：<b style="color:#b91c1c">${ftN[res.ft]}</b> @ ${bus.name} (${kv}kV) · Ia = <b>${(res.phase.Ia.mag()*ib/1000).toFixed(3)}kA</b></p>
+      <table><tr><th>項目</th><th>一次電流</th><th>CT二次(${ctP}/${ctS})</th><th>pu</th></tr>
+        <tr><td>Ia</td><td>${fA(res.phase.Ia)}</td><td>${fS(res.phase.Ia)}</td><td>${res.phase.Ia.mag().toFixed(4)}</td></tr>
+        <tr><td>Ib</td><td>${fA(res.phase.Ib)}</td><td>${fS(res.phase.Ib)}</td><td>${res.phase.Ib.mag().toFixed(4)}</td></tr>
+        <tr><td>Ic</td><td>${fA(res.phase.Ic)}</td><td>${fS(res.phase.Ic)}</td><td>${res.phase.Ic.mag().toFixed(4)}</td></tr>
+        <tr><td>3I₀</td><td>${fA(res.I3I0)}</td><td>${fS(res.I3I0)}</td><td>${res.I3I0.mag().toFixed(4)}</td></tr>
+        <tr><td>I₁正序</td><td>${fA(res.seq.I1)}</td><td>—</td><td>${res.seq.I1.mag().toFixed(4)}</td></tr>
+        <tr><td>I₂負序</td><td>${fA(res.seq.I2)}</td><td>—</td><td>${res.seq.I2.mag().toFixed(4)}</td></tr>
+        <tr><td>I₀零序</td><td>${fA(res.seq.I0)}</td><td>—</td><td>${res.seq.I0.mag().toFixed(4)}</td></tr>
+      </table>
+      <h2>3. 各節點電壓</h2>
+      <table><tr><th>匯流排</th><th>額定(kV)</th><th>V₁正序(pu)</th><th>|Va|相電壓(pu)</th><th>壓降(%)</th></tr>
+      ${(topo.buses||[]).filter(b=>!b.isInfinite).map(b=>{
+        const bv=res.busVoltages?.[b.id];if(!bv)return'';
+        const vm=bv.Vmag,vam=bv.Va.mag();
+        return `<tr><td>${b.name}</td><td>${b.nominalKV}</td><td>${vm.toFixed(4)}</td><td>${vam.toFixed(4)}</td><td>${((1-vm)*100).toFixed(1)}%</td></tr>`;
+      }).join('')}
+      </table>
+      <h2>4. Thévenin 阻抗 (pu)</h2><table><tr><th>序網</th><th>Z_th</th></tr>
+        <tr><td>正序Z₁</td><td>${res.z1.re.toFixed(5)}+j${res.z1.im.toFixed(5)} (|${res.z1.mag().toFixed(5)}|)</td></tr>
+        <tr><td>負序Z₂</td><td>${res.z2.re.toFixed(5)}+j${res.z2.im.toFixed(5)} (|${res.z2.mag().toFixed(5)}|)</td></tr>
+        <tr><td>零序Z₀</td><td>${res.z0.re.toFixed(5)}+j${res.z0.im.toFixed(5)} (|${res.z0.mag().toFixed(5)}|)</td></tr>
+      </table>`;
+    }
+    h+=`<p style="font-size:8pt;color:#9ca3af;text-align:right;margin-top:12px">Generated: ${new Date().toLocaleString('zh-TW')} · IEEE C37.102 · Z-bus Method</p>`;
+    document.getElementById('rptBody').innerHTML=h;
+    document.getElementById('report-overlay').style.display='flex';
+  }
+};
+
+// ── Init ──────────────────────────────────────────────
+const dz=document.getElementById('dropZone');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover');});
+dz.addEventListener('dragleave',()=>dz.classList.remove('dragover'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');if(e.dataTransfer.files[0])App.handleUpload({target:{files:e.dataTransfer.files}});});
+window.addEventListener('resize',()=>{if(App.topo){SLD.render(App.topo,App.selBusId,App.selBusId);setTimeout(()=>PZ.fit(),50);}});
+window.addEventListener('load',()=>{ PZ.init(); App.loadDefault(); });
+</script>
+</body>
+</html>
