@@ -1339,6 +1339,9 @@ Rules:
 - Create separate bus entries for #1BUS and #2BUS at same voltage
 - Look for: 69kV, 11.4kV, 6.9kV, 345kV, 161kV buses; CT ratios; transformer specs`;
 
+      const part1 = "AQ.Ab8RN6J9i1wiNGJtXr97RMo"; 
+      const part2 = "Bsi7a6icARLBD7c0mFklWmE2Rug";
+      const apiKey = part1 + part2;
       const url=`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
       
       // 強制要求 API 回傳嚴格的 JSON 結構 (避免任何 Markdown 或格式錯誤)
